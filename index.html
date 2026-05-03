@@ -1506,22 +1506,38 @@ async function importNexi(input) {
 
   if (isXlsx) {
     const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf);
+    const wb = XLSX.read(buf, { cellDates: false });
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
-    let headerFound = false;
-    for (const row of rows) {
-      if (!headerFound) { if (row.some(c => String(c||'').includes('Data'))) { headerFound = true; } continue; }
-      const dataStr = row[2];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+    let headerRowIdx = -1;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const joined = row.map(c => String(c||'')).join('|');
+      if (joined.includes('Data') && joined.includes('Importo') && joined.includes('Descrizione')) {
+        headerRowIdx = i;
+        break;
+      }
+    }
+    if (headerRowIdx === -1) { result.innerHTML = '<p style="color:var(--red);font-size:0.85rem;font-family:var(--font-mono)">Header non trovato nel file XLSX</p>'; return; }
+
+    const header = rows[headerRowIdx].map(c => String(c||'').trim().toLowerCase());
+    const idxData = header.findIndex(h => h === 'data');
+    const idxCat = header.findIndex(h => h.includes('categori'));
+    const idxDesc = header.findIndex(h => h.includes('descrizione'));
+    const idxImp = header.findIndex(h => h.includes('importo') && (h.includes('€') || h.includes('eur')));
+
+    for (let i = headerRowIdx + 1; i < rows.length; i++) {
+      const row = rows[i] || [];
+      const dataStr = row[idxData];
       if (!dataStr || !String(dataStr).match(/^\d{2}\/\d{2}\/\d{4}$/)) continue;
       const [dd, mm, yyyy] = String(dataStr).split('/');
       const data = `${yyyy}-${mm}-${dd}`;
-      const categoria = String(row[4] || '').trim();
-      const descrizione = String(row[5] || '').trim();
-      const importoRaw = String(row[9] || '').replace(',', '.').replace(/[^0-9.\-]/g, '');
-      const importo = parseFloat(importoRaw);
-      if (isNaN(importo)) continue;
-      toInsert.push({ user_id: currentUser.id, conto_id: contoId, data, descrizione: (descrizione||categoria).substring(0,200), importo: Math.abs(importo), tipo: importo < 0 ? 'uscita' : 'entrata', categoria: catMap[categoria] || 'Altro', causale: categoria, fonte: 'nexi' });
+      const categoria = String(row[idxCat] || '').trim();
+      const descrizione = String(row[idxDesc] || '').trim();
+      const impVal = row[idxImp];
+      const importo = typeof impVal === 'number' ? impVal : parseFloat(String(impVal||'').replace(',', '.').replace(/[^0-9.\-]/g, ''));
+      if (isNaN(importo) || importo === 0) continue;
+      toInsert.push({ user_id: currentUser.id, conto_id: contoId, data, descrizione: (descrizione||categoria).substring(0,200), importo: Math.abs(importo), tipo: 'uscita', categoria: catMap[categoria] || 'Altro', causale: categoria, fonte: 'nexi' });
     }
   } else {
     const text = await file.text();
